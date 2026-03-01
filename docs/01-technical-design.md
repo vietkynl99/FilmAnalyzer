@@ -13,7 +13,7 @@
             v                              v                              v
 +-----------------------+      +-----------------------+      +-----------------------+
 |                       |      |                       |      |                       |
-|   Firestore Database  | <--> |   Firebase Storage    |      |   Cloud Functions     |
+|   Realtime Database   | <--> |   Firebase Storage    |      |   Cloud Functions     |
 |   (Project Data)      |      |   (Film Posters)      |      |   (Optional Backend)  |
 |                       |      |                       |      |                       |
 +-----------------------+      +-----------------------+      +-----------------------+
@@ -21,14 +21,13 @@
 
 ## Tech Stack
 - **Frontend**: React 19, Vite, Tailwind CSS, Lucide Icons, Motion (for animations).
-- **Backend/Database**: Firebase (Firestore, Authentication, Storage).
+- **Backend/Database**: Firebase (Realtime Database, Authentication, Storage).
 - **AI Engine**: Gemini 3 Flash (for fast, cost-effective analysis and translation).
 - **Hosting**: Google Cloud Run (via AI Studio environment).
 
-## Firestore Schema Design
-### Collection: `projects`
-- `id`: string (auto-generated)
-- `userId`: string (Firebase Auth UID)
+## Realtime Database Schema Design
+### Path: `/films`
+- `id`: string (push key)
 - `chineseTitle`: string
 - `vietnameseTitle`: string
 - `posterUrl`: string
@@ -37,8 +36,7 @@
 - `seoKeywords`: array<string>
 - `seoDescription`: string
 - `status`: enum ("researching", "editing", "uploaded", "done")
-- `createdAt`: timestamp
-- `updatedAt`: timestamp
+- `lastUpdated`: ISO timestamp
 
 ## Document Structure
 - `/docs`: Documentation (Markdown).
@@ -49,9 +47,8 @@
 
 ## Security Considerations
 - **Firebase Security Rules**: Ensure users can only read/write their own data.
-- **API Key Management**: Gemini API keys must be stored in environment variables (`process.env.GEMINI_API_KEY`).
-- **Input Sanitization**: Validate all user inputs before sending to AI or Firestore.
-- **CORS**: Properly configure allowed origins for API calls.
+- **API Key Management**: Gemini and Firebase API keys must be stored in environment variables.
+- **Read-Only Settings**: Database configuration is immutable from the UI for security.
 
 ## AI Call Flow
 1. **Trigger**: User clicks "Analyze".
@@ -59,7 +56,7 @@
 3. **Request**: Frontend calls `ai.models.generateContent` with Gemini 3 Flash.
 4. **Response**: AI returns a JSON-formatted string.
 5. **Parsing**: Frontend parses JSON and updates the UI state.
-6. **Persistence**: User reviews and saves the data to Firestore.
+6. **Persistence**: User reviews and saves the data to Realtime Database.
 
 ## Error Handling
 - **AI Failures**: Implement retries for transient network errors. Show user-friendly messages for invalid inputs.

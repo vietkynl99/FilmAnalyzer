@@ -14,7 +14,8 @@ To empower content creators and translators by providing an AI-driven platform t
 - **Potential Analysis**: AI-driven scoring of how well a film might perform as a "Vietsub" project on YouTube.
 - **SEO Recommendations**: Suggested keywords, descriptions, and title variations for the Vietnamese market.
 - **Production Tracker**: A centralized dashboard to monitor the status of various film projects.
-- **Data Persistence**: Secure storage of all analyses and progress in Firebase.
+- **Data Persistence**: Secure storage of all analyses and progress in Firebase Realtime Database.
+- **System Health Monitor**: A read-only dashboard for tracking database connectivity.
 
 ## User Flow
 1. **Input**: User enters film details (Image URL/Upload, Chinese Title, Summary).

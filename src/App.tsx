@@ -471,104 +471,24 @@ export default function App() {
 
   const renderSettings = () => {
     return (
-      <div className="max-w-4xl space-y-8 animate-in fade-in slide-in-from-bottom-4 duration-500">
-        {/* Database Infrastructure Panel */}
-        <div className="bg-zinc-900 border border-zinc-800 rounded-2xl overflow-hidden shadow-xl">
-          <div className="p-6 border-b border-zinc-800 flex items-center justify-between bg-zinc-900/50">
-            <div className="flex items-center gap-3">
-              <div className="p-2 rounded-lg bg-emerald-500/10 text-emerald-500">
-                <Database className="w-5 h-5" />
-              </div>
-              <div>
-                <h3 className="text-lg font-semibold text-zinc-100">Database Infrastructure</h3>
-                <p className="text-xs text-zinc-500">Real-time system health and connectivity</p>
-              </div>
+      <div className="max-w-md mx-auto space-y-6 animate-in fade-in slide-in-from-bottom-4 duration-500">
+        <div className="bg-zinc-900 border border-zinc-800 rounded-2xl p-8 flex flex-col items-center justify-center shadow-xl">
+          <div className={`flex items-center gap-3 px-6 py-3 rounded-full text-sm font-bold border transition-all duration-500 ${
+            dbStatus === 'connected' ? 'bg-emerald-500/10 text-emerald-400 border-emerald-500/20' :
+            dbStatus === 'error' ? 'bg-red-500/10 text-red-400 border-red-500/20' :
+            'bg-zinc-800 text-zinc-400 border-zinc-700'
+          }`}>
+            {dbStatus === 'connected' && <div className="w-2 h-2 rounded-full bg-emerald-400 animate-pulse" />}
+            {dbStatus === 'connected' ? 'Connected' : dbStatus === 'error' ? 'Disconnected' : 'Checking Connection...'}
+          </div>
+
+          {dbStatus === 'error' && (
+            <div className="mt-6 text-center animate-in slide-in-from-top-2">
+              <p className="text-sm text-red-400 font-medium">
+                Connection failed. Please check environment configuration.
+              </p>
             </div>
-            
-            <div className={`flex items-center gap-2 px-3 py-1 rounded-full text-xs font-bold border ${
-              dbStatus === 'connected' ? 'bg-emerald-500/10 text-emerald-400 border-emerald-500/20' :
-              dbStatus === 'error' ? 'bg-red-500/10 text-red-400 border-red-500/20' :
-              'bg-zinc-800 text-zinc-400 border-zinc-700'
-            }`}>
-              {dbStatus === 'connected' && <div className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse" />}
-              {dbStatus === 'connected' ? 'System Online' : dbStatus === 'error' ? 'Connection Error' : 'Connecting...'}
-            </div>
-          </div>
-
-          <div className="p-8">
-            <div className="grid grid-cols-1 md:grid-cols-2 gap-8">
-              <div className="space-y-1">
-                <p className="text-[10px] font-bold text-zinc-500 uppercase tracking-widest">Firebase Project ID</p>
-                <p className="text-sm font-mono text-zinc-300 bg-zinc-950 px-3 py-2 rounded-lg border border-zinc-800/50">
-                  {import.meta.env.VITE_FIREBASE_PROJECT_ID || 'Not Configured'}
-                </p>
-              </div>
-              <div className="space-y-1">
-                <p className="text-[10px] font-bold text-zinc-500 uppercase tracking-widest">Database URL</p>
-                <p className="text-sm font-mono text-zinc-300 bg-zinc-950 px-3 py-2 rounded-lg border border-zinc-800/50 truncate">
-                  {import.meta.env.VITE_FIREBASE_DATABASE_URL || 'Not Configured'}
-                </p>
-              </div>
-              <div className="space-y-1">
-                <p className="text-[10px] font-bold text-zinc-500 uppercase tracking-widest">Region</p>
-                <p className="text-sm font-mono text-zinc-300 bg-zinc-950 px-3 py-2 rounded-lg border border-zinc-800/50">
-                  {import.meta.env.VITE_FIREBASE_DATABASE_URL?.includes('asia') ? 'asia-east1' : 'us-central1'}
-                </p>
-              </div>
-              <div className="space-y-1">
-                <p className="text-[10px] font-bold text-zinc-500 uppercase tracking-widest">Last Successful Sync</p>
-                <p className="text-sm font-mono text-zinc-300 bg-zinc-950 px-3 py-2 rounded-lg border border-zinc-800/50">
-                  {films.length > 0 ? lastSync : 'No data available yet'}
-                </p>
-              </div>
-            </div>
-
-            {dbStatus === 'error' && (
-              <div className="mt-8 p-4 rounded-xl bg-red-500/10 border border-red-500/20 flex items-start gap-3 animate-in slide-in-from-top-2">
-                <AlertCircle className="w-5 h-5 text-red-400 shrink-0 mt-0.5" />
-                <div>
-                  <p className="text-sm font-semibold text-red-400">Connection Failed</p>
-                  <p className="text-xs text-red-400/80 mt-1 leading-relaxed">
-                    The system encountered an error while connecting to the data source. Please check your environment variables or contact your administrator.
-                  </p>
-                </div>
-              </div>
-            )}
-
-            {dbStatus === 'connected' && (
-              <div className="mt-8 p-4 rounded-xl bg-emerald-500/10 border border-emerald-500/20 flex items-center gap-3 animate-in slide-in-from-top-2">
-                <ShieldCheck className="w-5 h-5 text-emerald-400" />
-                <p className="text-sm font-medium text-emerald-400">
-                  All systems operational. Data is being synchronized in real-time.
-                </p>
-              </div>
-            )}
-          </div>
-
-          <div className="p-6 bg-zinc-900/50 border-t border-zinc-800 flex items-center justify-between">
-            <p className="text-xs text-zinc-500 italic">
-              Configuration is managed via environment variables and cannot be modified from the UI.
-            </p>
-            <button 
-              onClick={() => window.location.reload()}
-              className="px-4 py-2 rounded-lg text-xs font-bold bg-zinc-800 hover:bg-zinc-700 text-zinc-300 transition-all flex items-center gap-2"
-            >
-              <RefreshCw className="w-3 h-3" />
-              Refresh Connection
-            </button>
-          </div>
-        </div>
-
-        {/* Other Settings Placeholder */}
-        <div className="grid grid-cols-1 md:grid-cols-2 gap-6 opacity-50">
-          <div className="p-6 bg-zinc-900 border border-zinc-800 rounded-2xl">
-            <h4 className="font-semibold mb-2">AI Model Preferences</h4>
-            <p className="text-sm text-zinc-500">Configure default models and token limits.</p>
-          </div>
-          <div className="p-6 bg-zinc-900 border border-zinc-800 rounded-2xl">
-            <h4 className="font-semibold mb-2">Notification Settings</h4>
-            <p className="text-sm text-zinc-500">Manage production alerts and updates.</p>
-          </div>
+          )}
         </div>
       </div>
     );
