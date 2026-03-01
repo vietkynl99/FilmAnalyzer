@@ -3,7 +3,7 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import { useState, useEffect } from 'react';
+import { useState, useEffect, ChangeEvent } from 'react';
 import { 
   LayoutDashboard, 
   PlusCircle, 
@@ -28,8 +28,10 @@ import {
   Loader2,
   Sparkles,
   Save,
-  Trash2
+  Trash2,
+  X
 } from 'lucide-react';
+import { motion, AnimatePresence } from 'motion/react';
 import { database, ref, onValue, push, set, update, remove } from './services/firebase';
 import { GoogleGenAI, Type } from "@google/genai";
 
@@ -56,7 +58,9 @@ interface Film {
   status: Status;
   lastUpdated: string;
   summary?: string;
+  description?: string;
   posterUrl?: string;
+  youtubeThumbnailUrl?: string;
   seoKeywords?: string[];
   seoDescription?: string;
   analysisReasoning?: string;
@@ -78,11 +82,42 @@ const STATUS_CONFIG = {
   done: { label: 'Done', color: 'text-emerald-400', bg: 'bg-emerald-400/10', icon: CheckCircle2 },
 };
 
+const FilmThumbnail = ({ url, title, className = "" }: { url?: string; title: string; className?: string }) => {
+  const [hasError, setHasError] = useState(false);
+
+  if (!url || hasError) {
+    return (
+      <div className={`flex items-center justify-center text-zinc-800 bg-zinc-950 ${className}`}>
+        <FilmIcon className="w-1/2 h-1/2 opacity-20" />
+      </div>
+    );
+  }
+
+  return (
+    <img 
+      src={url} 
+      alt={title} 
+      className={`object-contain ${className}`}
+      referrerPolicy="no-referrer"
+      onError={() => setHasError(true)}
+    />
+  );
+};
+
 export default function App() {
   const [activeSection, setActiveSection] = useState<Section>('Dashboard');
   const [films, setFilms] = useState<Film[]>([]);
   const [isLoading, setIsLoading] = useState(true);
   const [connectionError, setConnectionError] = useState<string | null>(null);
+  const [searchTerm, setSearchTerm] = useState('');
+  
+  // Deletion State
+  const [isDeleting, setIsDeleting] = useState(false);
+  const [filmToDelete, setFilmToDelete] = useState<string | null>(null);
+
+  // Edit State
+  const [filmToEdit, setFilmToEdit] = useState<Film | null>(null);
+  const [isUpdating, setIsUpdating] = useState(false);
   
   // Database State
   const [dbStatus, setDbStatus] = useState<DbStatus>('disconnected');
@@ -98,11 +133,12 @@ export default function App() {
   // Add New Film State
   const [newFilm, setNewFilm] = useState({
     chineseTitle: '',
-    summary: '',
-    posterUrl: ''
+    description: '',
+    thumbnail: null as File | null,
+    thumbnailPreview: '',
+    youtubeThumbnailUrl: ''
   });
-  const [analysisResult, setAnalysisResult] = useState<any>(null);
-  const [isAnalyzing, setIsAnalyzing] = useState(false);
+  const [isSaving, setIsSaving] = useState(false);
 
   const [lastSync, setLastSync] = useState<string | null>(null);
 
@@ -135,72 +171,53 @@ export default function App() {
     return () => unsubscribe();
   }, []);
 
-  const handleAnalyze = async () => {
-    if (!newFilm.chineseTitle || !newFilm.summary) return;
-    
-    setIsAnalyzing(true);
-    try {
-      const response = await ai.models.generateContent({
-        model: "gemini-3-flash-preview",
-        contents: `Analyze this Chinese film for the Vietnamese market:
-          Title: ${newFilm.chineseTitle}
-          Summary: ${newFilm.summary}
-          
-          Provide the response in JSON format with the following structure:
-          {
-            "vietnameseTitle": "string",
-            "potentialScore": number (0-10),
-            "seoKeywords": ["string", "string", "string"],
-            "seoDescription": "string",
-            "analysisReasoning": "string",
-            "targetAudience": "string"
-          }`,
-        config: {
-          responseMimeType: "application/json",
-          responseSchema: {
-            type: Type.OBJECT,
-            properties: {
-              vietnameseTitle: { type: Type.STRING },
-              potentialScore: { type: Type.NUMBER },
-              seoKeywords: { type: Type.ARRAY, items: { type: Type.STRING } },
-              seoDescription: { type: Type.STRING },
-              analysisReasoning: { type: Type.STRING },
-              targetAudience: { type: Type.STRING }
-            },
-            required: ["vietnameseTitle", "potentialScore", "seoKeywords", "seoDescription", "analysisReasoning", "targetAudience"]
-          }
-        }
-      });
-
-      const result = JSON.parse(response.text);
-      setAnalysisResult(result);
-    } catch (error) {
-      console.error("Analysis error:", error);
-      alert("Failed to analyze film. Please try again.");
-    } finally {
-      setIsAnalyzing(false);
+  const handleFileChange = (e: ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (file) {
+      const reader = new FileReader();
+      reader.onloadend = () => {
+        setNewFilm({
+          ...newFilm,
+          thumbnail: file,
+          thumbnailPreview: reader.result as string
+        });
+      };
+      reader.readAsDataURL(file);
     }
   };
 
-  const handleSaveFilm = async () => {
-    if (!analysisResult) return;
+  const isFormValid = newFilm.chineseTitle.trim() !== '' || 
+                     newFilm.description.trim() !== '' || 
+                     newFilm.thumbnail !== null ||
+                     newFilm.youtubeThumbnailUrl.trim() !== '';
 
+  const handleAddFilm = async () => {
+    if (!isFormValid) return;
+
+    setIsSaving(true);
     try {
       const filmsRef = ref(database, 'films');
       const newFilmRef = push(filmsRef);
+      
       await set(newFilmRef, {
-        ...newFilm,
-        ...analysisResult,
+        chineseTitle: newFilm.chineseTitle,
+        description: newFilm.description,
+        posterUrl: newFilm.thumbnailPreview || '',
+        youtubeThumbnailUrl: newFilm.youtubeThumbnailUrl || '',
         status: 'researching',
-        lastUpdated: new Date().toISOString()
+        lastUpdated: new Date().toISOString(),
+        vietnameseTitle: newFilm.chineseTitle || 'Untitled Film',
+        potentialScore: 0
       });
       
-      setNewFilm({ chineseTitle: '', summary: '', posterUrl: '' });
-      setAnalysisResult(null);
+      setNewFilm({ chineseTitle: '', description: '', thumbnail: null, thumbnailPreview: '', youtubeThumbnailUrl: '' });
+      alert('Film added successfully!');
       setActiveSection('Dashboard');
     } catch (error) {
       console.error("Save error:", error);
       alert("Failed to save film to database.");
+    } finally {
+      setIsSaving(false);
     }
   };
 
@@ -216,14 +233,268 @@ export default function App() {
     }
   };
 
-  const handleDeleteFilm = async (id: string) => {
-    if (!confirm("Are you sure you want to delete this film?")) return;
+  const handleDeleteFilm = (id: string) => {
+    setFilmToDelete(id);
+  };
+
+  const confirmDelete = async () => {
+    if (!filmToDelete) return;
+    setIsDeleting(true);
     try {
-      const filmRef = ref(database, `films/${id}`);
+      const filmRef = ref(database, `films/${filmToDelete}`);
       await remove(filmRef);
+      setFilmToDelete(null);
     } catch (error) {
       console.error("Delete error:", error);
+      alert("Failed to delete film. Please try again.");
+    } finally {
+      setIsDeleting(false);
     }
+  };
+
+  const renderDeleteModal = () => {
+    if (!filmToDelete) return null;
+
+    return (
+      <AnimatePresence>
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/80 backdrop-blur-sm">
+          <motion.div 
+            initial={{ opacity: 0, scale: 0.95 }}
+            animate={{ opacity: 1, scale: 1 }}
+            exit={{ opacity: 0, scale: 0.95 }}
+            className="bg-zinc-900 border border-zinc-800 rounded-2xl w-full max-w-md overflow-hidden shadow-2xl"
+          >
+            <div className="p-6">
+              <div className="flex items-center justify-between mb-6">
+                <div className="p-3 rounded-xl bg-red-500/10 text-red-500">
+                  <Trash2 className="w-6 h-6" />
+                </div>
+                <button 
+                  onClick={() => setFilmToDelete(null)}
+                  className="p-2 hover:bg-zinc-800 rounded-lg transition-colors text-zinc-500"
+                  disabled={isDeleting}
+                >
+                  <X className="w-5 h-5" />
+                </button>
+              </div>
+              
+              <h3 className="text-xl font-bold text-zinc-100 mb-2">Delete Film?</h3>
+              <p className="text-zinc-400 text-sm mb-8">
+                Are you sure you want to delete this film? This action cannot be undone and all associated data will be permanently removed.
+              </p>
+
+              <div className="flex items-center gap-3">
+                <button 
+                  onClick={() => setFilmToDelete(null)}
+                  disabled={isDeleting}
+                  className="flex-1 px-4 py-2.5 bg-zinc-800 hover:bg-zinc-700 text-zinc-200 font-medium rounded-xl transition-all border border-zinc-700 disabled:opacity-50"
+                >
+                  Cancel
+                </button>
+                <button 
+                  onClick={confirmDelete}
+                  disabled={isDeleting}
+                  className="flex-1 px-4 py-2.5 bg-red-600 hover:bg-red-500 text-white font-medium rounded-xl transition-all flex items-center justify-center gap-2 shadow-lg shadow-red-900/20 disabled:opacity-50"
+                >
+                  {isDeleting ? (
+                    <>
+                      <Loader2 className="w-4 h-4 animate-spin" />
+                      Deleting...
+                    </>
+                  ) : (
+                    'Confirm Delete'
+                  )}
+                </button>
+              </div>
+            </div>
+          </motion.div>
+        </div>
+      </AnimatePresence>
+    );
+  };
+
+  const handleEditFilm = (film: Film) => {
+    setFilmToEdit(film);
+  };
+
+  const handleUpdateFilm = async () => {
+    if (!filmToEdit) return;
+    setIsUpdating(true);
+    try {
+      const filmRef = ref(database, `films/${filmToEdit.id}`);
+      const updates = {
+        ...filmToEdit,
+        lastUpdated: new Date().toISOString().replace('T', ' ').split('.')[0]
+      };
+      await update(filmRef, updates);
+      setFilmToEdit(null);
+    } catch (error) {
+      console.error("Update error:", error);
+      alert("Failed to update film. Please try again.");
+    } finally {
+      setIsUpdating(false);
+    }
+  };
+
+  const renderEditModal = () => {
+    if (!filmToEdit) return null;
+
+    return (
+      <AnimatePresence>
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/80 backdrop-blur-sm">
+          <motion.div 
+            initial={{ opacity: 0, scale: 0.95, y: 20 }}
+            animate={{ opacity: 1, scale: 1, y: 0 }}
+            exit={{ opacity: 0, scale: 0.95, y: 20 }}
+            className="bg-zinc-900 border border-zinc-800 rounded-2xl w-full max-w-2xl overflow-hidden shadow-2xl flex flex-col max-h-[90vh]"
+          >
+            <div className="p-6 border-b border-zinc-800 flex items-center justify-between bg-zinc-900/50">
+              <div className="flex items-center gap-3">
+                <div className="p-2 rounded-lg bg-emerald-500/10 text-emerald-500">
+                  <Edit3 className="w-5 h-5" />
+                </div>
+                <div>
+                  <h3 className="text-lg font-bold text-zinc-100">Edit Film Details</h3>
+                  <p className="text-xs text-zinc-500">Update information for {filmToEdit.chineseTitle || 'Untitled'}</p>
+                </div>
+              </div>
+              <button 
+                onClick={() => setFilmToEdit(null)}
+                className="p-2 hover:bg-zinc-800 rounded-lg transition-colors text-zinc-500"
+                disabled={isUpdating}
+              >
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+
+            <div className="p-8 overflow-y-auto space-y-6">
+              {/* Chinese Title */}
+              <div className="space-y-2">
+                <label className="text-xs font-bold text-zinc-500 uppercase tracking-widest">Chinese Title</label>
+                <input 
+                  type="text"
+                  placeholder="Enter the original Chinese title..."
+                  value={filmToEdit.chineseTitle}
+                  onChange={(e) => setFilmToEdit({...filmToEdit, chineseTitle: e.target.value})}
+                  className="w-full bg-zinc-950 border border-zinc-800 rounded-xl px-4 py-3 text-sm focus:outline-none focus:border-emerald-500 transition-colors"
+                />
+              </div>
+
+              {/* Vietnamese Title */}
+              <div className="space-y-2">
+                <label className="text-xs font-bold text-zinc-500 uppercase tracking-widest">Vietnamese Title</label>
+                <input 
+                  type="text"
+                  placeholder="Enter the Vietnamese title..."
+                  value={filmToEdit.vietnameseTitle}
+                  onChange={(e) => setFilmToEdit({...filmToEdit, vietnameseTitle: e.target.value})}
+                  className="w-full bg-zinc-950 border border-zinc-800 rounded-xl px-4 py-3 text-sm focus:outline-none focus:border-emerald-500 transition-colors"
+                />
+              </div>
+
+              {/* Status Selection */}
+              <div className="space-y-2">
+                <label className="text-xs font-bold text-zinc-500 uppercase tracking-widest">Production Status</label>
+                <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
+                  {(['researching', 'editing', 'uploaded', 'done'] as Status[]).map((status) => {
+                    const config = STATUS_CONFIG[status];
+                    const isActive = filmToEdit.status === status;
+                    return (
+                      <button
+                        key={status}
+                        onClick={() => setFilmToEdit({...filmToEdit, status})}
+                        className={`flex items-center justify-center gap-2 p-3 rounded-xl border text-xs font-medium transition-all ${
+                          isActive 
+                            ? `${config.bg} ${config.color} border-current shadow-lg shadow-current/5` 
+                            : 'bg-zinc-950 border-zinc-800 text-zinc-500 hover:border-zinc-700'
+                        }`}
+                      >
+                        <config.icon className="w-3.5 h-3.5" />
+                        {config.label}
+                      </button>
+                    );
+                  })}
+                </div>
+              </div>
+
+              {/* Poster URL (Direct Edit) */}
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+                <div className="space-y-2">
+                  <label className="text-xs font-bold text-zinc-500 uppercase tracking-widest">Original Poster URL</label>
+                  <div className="flex gap-4">
+                    <div className="w-16 aspect-[2/3] rounded-lg bg-zinc-950 border border-zinc-800 overflow-hidden shrink-0">
+                      <FilmThumbnail url={filmToEdit.posterUrl} title={filmToEdit.chineseTitle} className="w-full h-full" />
+                    </div>
+                    <textarea 
+                      rows={2}
+                      placeholder="Paste image URL or Base64 data..."
+                      value={filmToEdit.posterUrl}
+                      onChange={(e) => setFilmToEdit({...filmToEdit, posterUrl: e.target.value})}
+                      className="flex-1 bg-zinc-950 border border-zinc-800 rounded-xl px-4 py-2 text-[10px] font-mono focus:outline-none focus:border-emerald-500 transition-colors resize-none"
+                    />
+                  </div>
+                </div>
+
+                <div className="space-y-2">
+                  <label className="text-xs font-bold text-zinc-500 uppercase tracking-widest">YouTube Thumbnail URL</label>
+                  <div className="flex gap-4">
+                    <div className="w-16 aspect-[2/3] rounded-lg bg-zinc-950 border border-zinc-800 overflow-hidden shrink-0">
+                      <FilmThumbnail url={filmToEdit.youtubeThumbnailUrl} title={filmToEdit.chineseTitle} className="w-full h-full" />
+                    </div>
+                    <textarea 
+                      rows={2}
+                      placeholder="Paste YouTube thumbnail URL..."
+                      value={filmToEdit.youtubeThumbnailUrl}
+                      onChange={(e) => setFilmToEdit({...filmToEdit, youtubeThumbnailUrl: e.target.value})}
+                      className="flex-1 bg-zinc-950 border border-zinc-800 rounded-xl px-4 py-2 text-[10px] font-mono focus:outline-none focus:border-emerald-500 transition-colors resize-none"
+                    />
+                  </div>
+                </div>
+              </div>
+
+              {/* Description */}
+              <div className="space-y-2">
+                <label className="text-xs font-bold text-zinc-500 uppercase tracking-widest">Description / Summary</label>
+                <textarea 
+                  rows={4}
+                  placeholder="Enter film description..."
+                  value={filmToEdit.description || filmToEdit.summary || ''}
+                  onChange={(e) => setFilmToEdit({...filmToEdit, description: e.target.value})}
+                  className="w-full bg-zinc-950 border border-zinc-800 rounded-xl px-4 py-3 text-sm focus:outline-none focus:border-emerald-500 transition-colors resize-none"
+                />
+              </div>
+            </div>
+
+            <div className="p-6 bg-zinc-900/50 border-t border-zinc-800 flex items-center gap-3">
+              <button 
+                onClick={() => setFilmToEdit(null)}
+                disabled={isUpdating}
+                className="flex-1 px-4 py-3 bg-zinc-800 hover:bg-zinc-700 text-zinc-200 font-medium rounded-xl transition-all border border-zinc-700 disabled:opacity-50"
+              >
+                Cancel
+              </button>
+              <button 
+                onClick={handleUpdateFilm}
+                disabled={isUpdating}
+                className="flex-[2] px-4 py-3 bg-emerald-600 hover:bg-emerald-500 text-white font-bold rounded-xl transition-all flex items-center justify-center gap-2 shadow-lg shadow-emerald-900/20 disabled:opacity-50"
+              >
+                {isUpdating ? (
+                  <>
+                    <Loader2 className="w-5 h-5 animate-spin" />
+                    Updating Film...
+                  </>
+                ) : (
+                  <>
+                    <Save className="w-5 h-5" />
+                    Save Changes
+                  </>
+                )}
+              </button>
+            </div>
+          </motion.div>
+        </div>
+      </AnimatePresence>
+    );
   };
 
   const handleTestConnection = async () => {
@@ -265,6 +536,185 @@ export default function App() {
     editing: films.filter(f => f.status === 'editing').length,
     uploaded: films.filter(f => f.status === 'uploaded').length,
     done: films.filter(f => f.status === 'done').length,
+  };
+
+  const renderAllFilms = () => {
+    const filteredFilms = films.filter(film => 
+      film.chineseTitle?.toLowerCase().includes(searchTerm.toLowerCase()) ||
+      film.vietnameseTitle?.toLowerCase().includes(searchTerm.toLowerCase())
+    );
+
+    if (films.length === 0) {
+      return (
+        <div className="flex flex-col items-center justify-center h-[calc(100vh-16rem)] text-center animate-in fade-in duration-500">
+          <div className="w-20 h-20 rounded-full bg-zinc-900 flex items-center justify-center mb-6 border border-zinc-800">
+            <FilmIcon className="w-10 h-10 text-zinc-700" />
+          </div>
+          <h3 className="text-2xl font-semibold mb-2 text-zinc-200">No films added yet</h3>
+          <p className="text-zinc-500 max-w-sm mb-8">Start by adding your first film to manage your production workflow.</p>
+          <button 
+            onClick={() => setActiveSection('Add New Film')}
+            className="px-6 py-3 bg-emerald-600 hover:bg-emerald-500 text-white font-medium rounded-xl transition-all flex items-center gap-2 shadow-lg shadow-emerald-900/20"
+          >
+            <PlusCircle className="w-5 h-5" />
+            Add Film
+          </button>
+        </div>
+      );
+    }
+
+    return (
+      <div className="space-y-8 animate-in fade-in duration-500 min-w-fit">
+        <div className="flex flex-col md:flex-row md:items-center justify-between gap-4">
+          <div className="relative flex-1 max-w-md">
+            <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-zinc-500" />
+            <input 
+              type="text"
+              placeholder="Search films by title..."
+              value={searchTerm}
+              onChange={(e) => setSearchTerm(e.target.value)}
+              className="w-full bg-zinc-900 border border-zinc-800 rounded-xl pl-10 pr-4 py-2 text-sm focus:outline-none focus:border-emerald-500 transition-colors"
+            />
+          </div>
+          <button 
+            onClick={() => setActiveSection('Add New Film')}
+            className="px-4 py-2 bg-emerald-600 hover:bg-emerald-500 text-white text-sm font-medium rounded-lg transition-colors flex items-center gap-2"
+          >
+            <PlusCircle className="w-4 h-4" />
+            Add Film
+          </button>
+        </div>
+
+        {filteredFilms.length === 0 ? (
+          <div className="flex flex-col items-center justify-center h-64 text-center">
+            <div className="w-12 h-12 rounded-full bg-zinc-900 flex items-center justify-center mb-4 border border-zinc-800">
+              <Search className="w-6 h-6 text-zinc-700" />
+            </div>
+            <p className="text-zinc-500">No films found matching "{searchTerm}"</p>
+          </div>
+        ) : (
+          <div className="bg-zinc-900 border border-zinc-800 rounded-2xl shadow-xl overflow-hidden">
+            <table className="w-full text-left border-collapse">
+              <thead>
+                  <tr className="bg-zinc-950/50 border-b border-zinc-800">
+                    <th className="px-6 py-4 text-[10px] font-bold text-zinc-500 uppercase tracking-widest">Thumbnail</th>
+                    <th className="px-6 py-4 text-[10px] font-bold text-zinc-500 uppercase tracking-widest">Title & Description</th>
+                    <th className="px-6 py-4 text-[10px] font-bold text-zinc-500 uppercase tracking-widest">Status</th>
+                    <th className="px-6 py-4 text-[10px] font-bold text-zinc-500 uppercase tracking-widest">Source</th>
+                    <th className="px-6 py-4 text-[10px] font-bold text-zinc-500 uppercase tracking-widest">Created Date</th>
+                    <th className="px-6 py-4 text-[10px] font-bold text-zinc-500 uppercase tracking-widest text-right">Actions</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-zinc-800/50">
+                  {filteredFilms.map((film) => {
+                    // Derive status
+                    let displayStatus = { label: 'Draft', bg: 'bg-zinc-500/10', text: 'text-zinc-400' };
+                    const hasTitle = film.chineseTitle && film.chineseTitle.trim() !== '';
+                    const hasDesc = (film.description || film.summary) && (film.description || film.summary)?.trim() !== '';
+                    const hasPoster = film.posterUrl && film.posterUrl.trim() !== '';
+                    const hasYoutube = film.youtubeThumbnailUrl && film.youtubeThumbnailUrl.trim() !== '';
+                    
+                    if (film.potentialScore > 0) {
+                      displayStatus = { label: 'Analyzed', bg: 'bg-emerald-500/10', text: 'text-emerald-400' };
+                    } else if (hasTitle && hasDesc && (hasPoster || hasYoutube)) {
+                      displayStatus = { label: 'Ready', bg: 'bg-blue-500/10', text: 'text-blue-400' };
+                    } else if (hasTitle || hasDesc || hasPoster || hasYoutube) {
+                      displayStatus = { label: 'AI Pending', bg: 'bg-yellow-500/10', text: 'text-yellow-400' };
+                    }
+
+                    const activeThumbnail = hasYoutube ? film.youtubeThumbnailUrl : film.posterUrl;
+
+                    return (
+                      <tr key={film.id} className="group hover:bg-zinc-800/30 transition-colors">
+                        <td className="px-6 py-4">
+                          <div className="relative group/thumb">
+                            <div className="w-12 aspect-[2/3] bg-zinc-950 rounded border border-zinc-800 overflow-hidden flex items-center justify-center">
+                              <FilmThumbnail 
+                                url={activeThumbnail} 
+                                title={film.chineseTitle} 
+                                className="w-full h-full"
+                              />
+                            </div>
+                            
+                            {/* Hover Preview Popup */}
+                            <div className="absolute left-full top-1/2 -translate-y-1/2 ml-4 z-50 opacity-0 group-hover/thumb:opacity-100 pointer-events-none transition-all duration-200 scale-95 group-hover/thumb:scale-100 origin-left">
+                              <div className="w-48 aspect-[2/3] bg-zinc-900 border border-zinc-700 rounded-xl shadow-2xl overflow-hidden p-1">
+                                <FilmThumbnail 
+                                  url={activeThumbnail} 
+                                  title={film.chineseTitle} 
+                                  className="w-full h-full rounded-lg"
+                                />
+                              </div>
+                            </div>
+                          </div>
+                        </td>
+                        <td className="px-6 py-4">
+                          <div className="max-w-xs">
+                            <h4 className="font-bold text-zinc-100 text-sm truncate">
+                              {film.chineseTitle || 'Untitled'}
+                            </h4>
+                            <p className="text-[11px] text-zinc-500 truncate mt-0.5">
+                              {film.description || film.summary || 'No description provided.'}
+                            </p>
+                          </div>
+                        </td>
+                        <td className="px-6 py-4">
+                          <span className={`px-2 py-0.5 rounded-md text-[10px] font-bold uppercase tracking-wider border border-white/5 ${displayStatus.bg} ${displayStatus.text}`}>
+                            {displayStatus.label}
+                          </span>
+                        </td>
+                        <td className="px-6 py-4">
+                          <div className="flex flex-wrap gap-1">
+                            {hasYoutube && (
+                              <span className="px-1.5 py-0.5 rounded bg-red-500/10 text-red-400 text-[9px] font-medium border border-red-500/10">YouTube</span>
+                            )}
+                            {hasPoster && (
+                              <span className="px-1.5 py-0.5 rounded bg-blue-500/10 text-blue-400 text-[9px] font-medium border border-blue-500/10">Original</span>
+                            )}
+                            {!hasYoutube && !hasPoster && (
+                              <span className="text-[9px] text-zinc-600 italic">None</span>
+                            )}
+                          </div>
+                        </td>
+                        <td className="px-6 py-4">
+                          <div className="flex items-center gap-2 text-[11px] text-zinc-500">
+                            <Clock className="w-3 h-3 opacity-50" />
+                            {new Date(film.lastUpdated).toLocaleDateString()}
+                          </div>
+                        </td>
+                        <td className="px-6 py-4 text-right">
+                          <div className="flex items-center justify-end gap-2">
+                            <button 
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                handleEditFilm(film);
+                              }}
+                              className="p-2 rounded-lg hover:bg-zinc-800 text-zinc-400 hover:text-emerald-400 transition-all"
+                              title="Edit Film"
+                            >
+                              <Edit3 className="w-4 h-4" />
+                            </button>
+                            <button 
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                handleDeleteFilm(film.id);
+                              }}
+                              className="p-2 rounded-lg hover:bg-zinc-800 text-zinc-400 hover:text-red-400 transition-all"
+                              title="Delete Film"
+                            >
+                              <Trash2 className="w-4 h-4" />
+                            </button>
+                          </div>
+                        </td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
+            </div>
+        )}
+      </div>
+    );
   };
 
   const renderDashboard = () => {
@@ -339,7 +789,7 @@ export default function App() {
     }
 
     return (
-      <div className="space-y-8 animate-in fade-in duration-500">
+      <div className="space-y-8 animate-in fade-in duration-500 min-w-fit">
         {/* KPI Cards */}
         <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-5 gap-4">
           {[
@@ -379,10 +829,9 @@ export default function App() {
                 View All
               </button>
             </div>
-            <div className="bg-zinc-900 border border-zinc-800 rounded-2xl overflow-hidden">
-              <div className="overflow-x-auto">
-                <table className="w-full text-left border-collapse">
-                  <thead>
+            <div className="bg-zinc-900 border border-zinc-800 rounded-2xl overflow-hidden shadow-sm">
+              <table className="w-full text-left border-collapse">
+                <thead>
                     <tr className="border-b border-zinc-800 bg-zinc-900/50">
                       <th className="px-6 py-4 text-xs font-semibold text-zinc-500 uppercase tracking-wider">Film Title</th>
                       <th className="px-6 py-4 text-xs font-semibold text-zinc-500 uppercase tracking-wider text-center">Score</th>
@@ -422,7 +871,6 @@ export default function App() {
                 </table>
               </div>
             </div>
-          </div>
 
           {/* Workflow Overview */}
           <div className="space-y-4">
@@ -471,24 +919,104 @@ export default function App() {
 
   const renderSettings = () => {
     return (
-      <div className="max-w-md mx-auto space-y-6 animate-in fade-in slide-in-from-bottom-4 duration-500">
-        <div className="bg-zinc-900 border border-zinc-800 rounded-2xl p-8 flex flex-col items-center justify-center shadow-xl">
-          <div className={`flex items-center gap-3 px-6 py-3 rounded-full text-sm font-bold border transition-all duration-500 ${
-            dbStatus === 'connected' ? 'bg-emerald-500/10 text-emerald-400 border-emerald-500/20' :
-            dbStatus === 'error' ? 'bg-red-500/10 text-red-400 border-red-500/20' :
-            'bg-zinc-800 text-zinc-400 border-zinc-700'
-          }`}>
-            {dbStatus === 'connected' && <div className="w-2 h-2 rounded-full bg-emerald-400 animate-pulse" />}
-            {dbStatus === 'connected' ? 'Connected' : dbStatus === 'error' ? 'Disconnected' : 'Checking Connection...'}
+      <div className="max-w-4xl space-y-8 animate-in fade-in slide-in-from-bottom-4 duration-500">
+        {/* Database Infrastructure Panel */}
+        <div className="bg-zinc-900 border border-zinc-800 rounded-2xl overflow-hidden shadow-xl">
+          <div className="p-6 border-b border-zinc-800 flex items-center justify-between bg-zinc-900/50">
+            <div className="flex items-center gap-3">
+              <div className="p-2 rounded-lg bg-emerald-500/10 text-emerald-500">
+                <Database className="w-5 h-5" />
+              </div>
+              <div>
+                <h3 className="text-lg font-semibold text-zinc-100">Database Infrastructure</h3>
+                <p className="text-xs text-zinc-500">Real-time system health and connectivity</p>
+              </div>
+            </div>
+            
+            <div className={`flex items-center gap-2 px-3 py-1 rounded-full text-xs font-bold border ${
+              dbStatus === 'connected' ? 'bg-emerald-500/10 text-emerald-400 border-emerald-500/20' :
+              dbStatus === 'error' ? 'bg-red-500/10 text-red-400 border-red-500/20' :
+              'bg-zinc-800 text-zinc-400 border-zinc-700'
+            }`}>
+              {dbStatus === 'connected' && <div className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse" />}
+              {dbStatus === 'connected' ? 'System Online' : dbStatus === 'error' ? 'Connection Error' : 'Connecting...'}
+            </div>
           </div>
 
-          {dbStatus === 'error' && (
-            <div className="mt-6 text-center animate-in slide-in-from-top-2">
-              <p className="text-sm text-red-400 font-medium">
-                Connection failed. Please check environment configuration.
-              </p>
+          <div className="p-8">
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-8">
+              <div className="space-y-1">
+                <p className="text-[10px] font-bold text-zinc-500 uppercase tracking-widest">Firebase Project ID</p>
+                <p className="text-sm font-mono text-zinc-300 bg-zinc-950 px-3 py-2 rounded-lg border border-zinc-800/50">
+                  {import.meta.env.VITE_FIREBASE_PROJECT_ID || 'Not Configured'}
+                </p>
+              </div>
+              <div className="space-y-1">
+                <p className="text-[10px] font-bold text-zinc-500 uppercase tracking-widest">Database URL</p>
+                <p className="text-sm font-mono text-zinc-300 bg-zinc-950 px-3 py-2 rounded-lg border border-zinc-800/50 truncate">
+                  {import.meta.env.VITE_FIREBASE_DATABASE_URL || 'Not Configured'}
+                </p>
+              </div>
+              <div className="space-y-1">
+                <p className="text-[10px] font-bold text-zinc-500 uppercase tracking-widest">Region</p>
+                <p className="text-sm font-mono text-zinc-300 bg-zinc-950 px-3 py-2 rounded-lg border border-zinc-800/50">
+                  {import.meta.env.VITE_FIREBASE_DATABASE_URL?.includes('asia') ? 'asia-east1' : 'us-central1'}
+                </p>
+              </div>
+              <div className="space-y-1">
+                <p className="text-[10px] font-bold text-zinc-500 uppercase tracking-widest">Last Successful Sync</p>
+                <p className="text-sm font-mono text-zinc-300 bg-zinc-950 px-3 py-2 rounded-lg border border-zinc-800/50">
+                  {films.length > 0 ? lastSync : 'No data available yet'}
+                </p>
+              </div>
             </div>
-          )}
+
+            {dbStatus === 'error' && (
+              <div className="mt-8 p-4 rounded-xl bg-red-500/10 border border-red-500/20 flex items-start gap-3 animate-in slide-in-from-top-2">
+                <AlertCircle className="w-5 h-5 text-red-400 shrink-0 mt-0.5" />
+                <div>
+                  <p className="text-sm font-semibold text-red-400">Connection Failed</p>
+                  <p className="text-xs text-red-400/80 mt-1 leading-relaxed">
+                    The system encountered an error while connecting to the data source. Please check your environment variables or contact your administrator.
+                  </p>
+                </div>
+              </div>
+            )}
+
+            {dbStatus === 'connected' && (
+              <div className="mt-8 p-4 rounded-xl bg-emerald-500/10 border border-emerald-500/20 flex items-center gap-3 animate-in slide-in-from-top-2">
+                <ShieldCheck className="w-5 h-5 text-emerald-400" />
+                <p className="text-sm font-medium text-emerald-400">
+                  All systems operational. Data is being synchronized in real-time.
+                </p>
+              </div>
+            )}
+          </div>
+
+          <div className="p-6 bg-zinc-900/50 border-t border-zinc-800 flex items-center justify-between">
+            <p className="text-xs text-zinc-500 italic">
+              Configuration is managed via environment variables and cannot be modified from the UI.
+            </p>
+            <button 
+              onClick={() => window.location.reload()}
+              className="px-4 py-2 rounded-lg text-xs font-bold bg-zinc-800 hover:bg-zinc-700 text-zinc-300 transition-all flex items-center gap-2"
+            >
+              <RefreshCw className="w-3 h-3" />
+              Refresh Connection
+            </button>
+          </div>
+        </div>
+
+        {/* Other Settings Placeholder */}
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-6 opacity-50">
+          <div className="p-6 bg-zinc-900 border border-zinc-800 rounded-2xl">
+            <h4 className="font-semibold mb-2">AI Model Preferences</h4>
+            <p className="text-sm text-zinc-500">Configure default models and token limits.</p>
+          </div>
+          <div className="p-6 bg-zinc-900 border border-zinc-800 rounded-2xl">
+            <h4 className="font-semibold mb-2">Notification Settings</h4>
+            <p className="text-sm text-zinc-500">Manage production alerts and updates.</p>
+          </div>
         </div>
       </div>
     );
@@ -496,111 +1024,108 @@ export default function App() {
 
   const renderAddNewFilm = () => {
     return (
-      <div className="max-w-4xl space-y-8 animate-in fade-in slide-in-from-bottom-4 duration-500">
-        <div className="grid grid-cols-1 lg:grid-cols-2 gap-8">
-          {/* Input Form */}
-          <div className="bg-zinc-900 border border-zinc-800 rounded-2xl p-8 space-y-6 shadow-xl">
-            <div className="flex items-center gap-3 mb-2">
-              <div className="p-2 rounded-lg bg-emerald-500/10 text-emerald-500">
-                <PlusCircle className="w-5 h-5" />
-              </div>
-              <h3 className="text-lg font-semibold text-zinc-100">Film Details</h3>
+      <div className="max-w-2xl mx-auto space-y-8 animate-in fade-in slide-in-from-bottom-4 duration-500">
+        <div className="bg-zinc-900 border border-zinc-800 rounded-2xl p-8 space-y-8 shadow-xl">
+          <div className="flex items-center gap-3">
+            <div className="p-2 rounded-lg bg-emerald-500/10 text-emerald-500">
+              <PlusCircle className="w-6 h-6" />
             </div>
-
-            <div className="space-y-4">
-              <div className="space-y-2">
-                <label className="text-xs font-semibold text-zinc-500 uppercase tracking-wider">Chinese Title</label>
-                <input 
-                  type="text"
-                  placeholder="e.g. 庆余年 第二季"
-                  value={newFilm.chineseTitle}
-                  onChange={(e) => setNewFilm({...newFilm, chineseTitle: e.target.value})}
-                  className="w-full bg-zinc-950 border border-zinc-800 rounded-xl px-4 py-3 text-sm focus:outline-none focus:border-emerald-500 transition-colors"
-                />
-              </div>
-              <div className="space-y-2">
-                <label className="text-xs font-semibold text-zinc-500 uppercase tracking-wider">Poster Image URL</label>
-                <input 
-                  type="text"
-                  placeholder="https://example.com/poster.jpg"
-                  value={newFilm.posterUrl}
-                  onChange={(e) => setNewFilm({...newFilm, posterUrl: e.target.value})}
-                  className="w-full bg-zinc-950 border border-zinc-800 rounded-xl px-4 py-3 text-sm focus:outline-none focus:border-emerald-500 transition-colors"
-                />
-              </div>
-              <div className="space-y-2">
-                <label className="text-xs font-semibold text-zinc-500 uppercase tracking-wider">Episode Summary</label>
-                <textarea 
-                  rows={6}
-                  placeholder="Paste the film summary or episode details here..."
-                  value={newFilm.summary}
-                  onChange={(e) => setNewFilm({...newFilm, summary: e.target.value})}
-                  className="w-full bg-zinc-950 border border-zinc-800 rounded-xl px-4 py-3 text-sm focus:outline-none focus:border-emerald-500 transition-colors resize-none"
-                />
-              </div>
+            <div>
+              <h3 className="text-xl font-bold text-zinc-100">Add New Film</h3>
+              <p className="text-sm text-zinc-500">Provide at least one field to start your analysis</p>
             </div>
-
-            <button 
-              onClick={handleAnalyze}
-              disabled={isAnalyzing || !newFilm.chineseTitle || !newFilm.summary}
-              className="w-full py-4 bg-emerald-600 hover:bg-emerald-500 disabled:bg-zinc-800 disabled:text-zinc-500 text-white font-bold rounded-xl transition-all flex items-center justify-center gap-2 shadow-lg shadow-emerald-900/20"
-            >
-              {isAnalyzing ? <Loader2 className="w-5 h-5 animate-spin" /> : <Sparkles className="w-5 h-5" />}
-              {isAnalyzing ? 'Analyzing with AI...' : 'Analyze Potential'}
-            </button>
           </div>
 
-          {/* Analysis Result */}
           <div className="space-y-6">
-            {analysisResult ? (
-              <div className="bg-zinc-900 border border-emerald-500/30 rounded-2xl p-8 space-y-6 shadow-xl animate-in zoom-in-95 duration-300">
-                <div className="flex items-center justify-between">
-                  <h3 className="text-lg font-semibold text-emerald-400 flex items-center gap-2">
-                    <CheckCircle className="w-5 h-5" />
-                    AI Analysis Result
-                  </h3>
-                  <div className="px-3 py-1 bg-emerald-500/10 text-emerald-400 rounded-full text-xs font-bold border border-emerald-500/20">
-                    Score: {analysisResult.potentialScore}/10
-                  </div>
-                </div>
+            {/* Chinese Title */}
+            <div className="space-y-2">
+              <label className="text-xs font-bold text-zinc-500 uppercase tracking-widest">Chinese Title</label>
+              <input 
+                type="text"
+                placeholder="Enter the original Chinese title..."
+                value={newFilm.chineseTitle}
+                onChange={(e) => setNewFilm({...newFilm, chineseTitle: e.target.value})}
+                className="w-full bg-zinc-950 border border-zinc-800 rounded-xl px-4 py-3 text-sm focus:outline-none focus:border-emerald-500 transition-colors"
+              />
+            </div>
 
-                <div className="space-y-4">
-                  <div>
-                    <label className="text-xs font-semibold text-zinc-500 uppercase tracking-wider">Vietnamese Title</label>
-                    <p className="text-xl font-bold text-zinc-100">{analysisResult.vietnameseTitle}</p>
-                  </div>
-                  <div>
-                    <label className="text-xs font-semibold text-zinc-500 uppercase tracking-wider">SEO Keywords</label>
-                    <div className="flex flex-wrap gap-2 mt-1">
-                      {analysisResult.seoKeywords.map((kw: string, i: number) => (
-                        <span key={i} className="px-2 py-1 bg-zinc-800 text-zinc-300 rounded text-xs">{kw}</span>
-                      ))}
+            {/* YouTube Thumbnail URL */}
+            <div className="space-y-2">
+              <label className="text-xs font-bold text-zinc-500 uppercase tracking-widest">YouTube Thumbnail URL (Optional)</label>
+              <input 
+                type="text"
+                placeholder="Enter YouTube thumbnail URL..."
+                value={newFilm.youtubeThumbnailUrl}
+                onChange={(e) => setNewFilm({...newFilm, youtubeThumbnailUrl: e.target.value})}
+                className="w-full bg-zinc-950 border border-zinc-800 rounded-xl px-4 py-3 text-sm focus:outline-none focus:border-emerald-500 transition-colors"
+              />
+            </div>
+
+            {/* Thumbnail Upload */}
+            <div className="space-y-2">
+              <label className="text-xs font-bold text-zinc-500 uppercase tracking-widest">Thumbnail Image</label>
+              <div className="flex flex-col items-center justify-center w-full">
+                <label className={`flex flex-col items-center justify-center w-full aspect-[3/4] max-h-64 max-w-[200px] border-2 border-dashed rounded-xl cursor-pointer transition-all overflow-hidden ${
+                  newFilm.thumbnailPreview ? 'border-emerald-500/50 bg-emerald-500/5' : 'border-zinc-800 hover:border-zinc-700 bg-zinc-950'
+                }`}>
+                  {newFilm.thumbnailPreview ? (
+                    <img 
+                      src={newFilm.thumbnailPreview} 
+                      alt="Preview" 
+                      className="w-full h-full object-contain"
+                      referrerPolicy="no-referrer"
+                    />
+                  ) : (
+                    <div className="flex flex-col items-center justify-center pt-5 pb-6">
+                      <UploadCloud className="w-10 h-10 mb-3 text-zinc-600" />
+                      <p className="mb-2 text-sm text-zinc-500 px-4 text-center">
+                        <span className="font-semibold">Click to upload</span> or drag and drop
+                      </p>
+                      <p className="text-[10px] text-zinc-600">PNG, JPG or WEBP</p>
                     </div>
-                  </div>
-                  <div>
-                    <label className="text-xs font-semibold text-zinc-500 uppercase tracking-wider">Target Audience</label>
-                    <p className="text-sm text-zinc-300">{analysisResult.targetAudience}</p>
-                  </div>
-                  <div>
-                    <label className="text-xs font-semibold text-zinc-500 uppercase tracking-wider">Reasoning</label>
-                    <p className="text-sm text-zinc-400 leading-relaxed">{analysisResult.analysisReasoning}</p>
-                  </div>
-                </div>
+                  )}
+                  <input type="file" className="hidden" accept="image/*" onChange={handleFileChange} />
+                </label>
+                {newFilm.thumbnailPreview && (
+                  <button 
+                    onClick={() => setNewFilm({...newFilm, thumbnail: null, thumbnailPreview: ''})}
+                    className="mt-2 text-xs text-red-400 hover:text-red-300 font-medium flex items-center gap-1"
+                  >
+                    <Trash2 className="w-3 h-3" />
+                    Remove image
+                  </button>
+                )}
+              </div>
+            </div>
 
-                <button 
-                  onClick={handleSaveFilm}
-                  className="w-full py-4 bg-zinc-100 hover:bg-white text-zinc-950 font-bold rounded-xl transition-all flex items-center justify-center gap-2"
-                >
-                  <Save className="w-5 h-5" />
-                  Save to Production
-                </button>
-              </div>
-            ) : (
-              <div className="h-full border border-dashed border-zinc-800 rounded-2xl flex flex-col items-center justify-center text-center p-12 text-zinc-600">
-                <Sparkles className="w-12 h-12 mb-4 opacity-20" />
-                <p className="text-sm font-medium">Analysis results will appear here after processing.</p>
-              </div>
+            {/* Description */}
+            <div className="space-y-2">
+              <label className="text-xs font-bold text-zinc-500 uppercase tracking-widest">Description</label>
+              <textarea 
+                rows={5}
+                placeholder="Enter a brief summary or notes about the film..."
+                value={newFilm.description}
+                onChange={(e) => setNewFilm({...newFilm, description: e.target.value})}
+                className="w-full bg-zinc-950 border border-zinc-800 rounded-xl px-4 py-3 text-sm focus:outline-none focus:border-emerald-500 transition-colors resize-none"
+              />
+            </div>
+          </div>
+
+          <div className="pt-4">
+            {!isFormValid && (
+              <p className="text-xs text-zinc-500 mb-4 flex items-center gap-2 italic">
+                <AlertCircle className="w-3 h-3" />
+                Please provide at least one field to enable submission.
+              </p>
             )}
+            <button 
+              onClick={handleAddFilm}
+              disabled={!isFormValid || isSaving}
+              className="w-full py-4 bg-emerald-600 hover:bg-emerald-500 disabled:bg-zinc-800 disabled:text-zinc-500 text-white font-bold rounded-xl transition-all flex items-center justify-center gap-2 shadow-lg shadow-emerald-900/20"
+            >
+              {isSaving ? <Loader2 className="w-5 h-5 animate-spin" /> : <PlusCircle className="w-5 h-5" />}
+              {isSaving ? 'Adding Film...' : 'Add Film'}
+            </button>
           </div>
         </div>
       </div>
@@ -608,7 +1133,7 @@ export default function App() {
   };
 
   return (
-    <div className="flex min-h-screen bg-zinc-950 text-zinc-100 font-sans">
+    <div className="flex h-screen overflow-hidden bg-zinc-950 text-zinc-100 font-sans">
       {/* Sidebar */}
       <aside className="w-64 border-r border-zinc-800 flex flex-col">
         <div className="p-6 border-b border-zinc-800">
@@ -618,7 +1143,7 @@ export default function App() {
           </h1>
         </div>
         
-        <nav className="flex-1 p-4 space-y-1">
+        <nav className="flex-1 p-4 space-y-1 overflow-y-auto">
           {navItems.map((item) => (
             <button
               key={item.name}
@@ -663,10 +1188,11 @@ export default function App() {
           </div>
         </header>
 
-        <div className="flex-1 p-8 overflow-auto">
-          <div className="max-w-6xl mx-auto">
+        <div className="flex-1 overflow-auto">
+          <div className="p-8 min-w-fit">
             {activeSection === 'Dashboard' ? renderDashboard() : 
              activeSection === 'Add New Film' ? renderAddNewFilm() :
+             activeSection === 'All Films' ? renderAllFilms() :
              activeSection === 'Settings' ? renderSettings() : (
               <div className="rounded-2xl border border-dashed border-zinc-800 h-[calc(100vh-12rem)] flex flex-col items-center justify-center text-center p-12">
                 <div className="w-16 h-16 rounded-full bg-zinc-900 flex items-center justify-center mb-4">
@@ -681,6 +1207,8 @@ export default function App() {
           </div>
         </div>
       </main>
+      {renderDeleteModal()}
+      {renderEditModal()}
     </div>
   );
 }
