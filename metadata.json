@@ -1,0 +1,5 @@
+{
+  "name": "Film Analyzer",
+  "description": "A web tool for analyzing Chinese films, translating titles, and tracking production progress with AI-powered SEO and potential analysis.",
+  "requestFramePermissions": []
+}
